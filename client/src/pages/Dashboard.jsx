@@ -87,7 +87,7 @@ export default function Dashboard({ profileId, profileData, setProfileId, setPro
                 Create Friend Profile
               </button>
               <button className="btn btn-secondary" onClick={handleSeedDemo}>
-                ⚡ Load Ayush (Demo Data)
+                ⚡ Load Sample Demo Data
               </button>
             </div>
           </div>
@@ -108,6 +108,11 @@ export default function Dashboard({ profileId, profileData, setProfileId, setPro
       />
 
       <main className="container" style={{ padding: 'var(--space-2xl) var(--space-lg)' }}>
+        {String(profileId).startsWith('demo-') && (
+          <div className="demo-banner" role="status">
+            Sample profile and session history · Demonstration data, not a real friend's results
+          </div>
+        )}
         {error && (
           <div className="error-banner" style={{ marginBottom: '1.5rem' }}>
             <span>{error}</span>
@@ -167,9 +172,9 @@ export default function Dashboard({ profileId, profileData, setProfileId, setPro
                   {recommendation.reason}
                 </p>
 
-                {recommendation.prediction_score !== null && (
+                {recommendation.risk_score != null && (
                   <div className="nba-prediction">
-                    ⚠️ {Math.round(recommendation.prediction_score * 100)}% LIKELIHOOD OF PERSISTENT WEAKNESS
+                    HISTORICAL RISK INDEX · {recommendation.risk_score}/100 · RULE-BASED
                   </div>
                 )}
 
@@ -177,7 +182,7 @@ export default function Dashboard({ profileId, profileData, setProfileId, setPro
                   <button 
                     className="btn btn-primary" 
                     style={{ fontSize: '1.05rem', padding: '0.85rem 1.75rem' }}
-                    onClick={() => navigate('/practice')}
+                    onClick={() => navigate(`/practice?topic=${encodeURIComponent(recommendation.topic)}`)}
                   >
                     🚀 Start This Drill Now
                   </button>
@@ -213,7 +218,7 @@ export default function Dashboard({ profileId, profileData, setProfileId, setPro
                     Resolution Rate
                   </div>
                   <div style={{ fontFamily: 'var(--font-mono)', fontSize: '2.5rem', fontWeight: 700, color: 'var(--lime-dark)' }}>
-                    {stats.resolutionRate ?? '25%'}
+                    {Number(stats.total) > 0 ? `${Math.round((Number(stats.resolved) / Number(stats.total)) * 100)}%` : '—'}
                   </div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--gray)' }}>Errors overcome</div>
                 </div>
@@ -277,20 +282,20 @@ export default function Dashboard({ profileId, profileData, setProfileId, setPro
                 )}
               </div>
 
-              {/* PERSISTENCE PREDICTIONS (TabPFN-style) */}
+              {/* HISTORY-BASED TOPIC RISK */}
               <div>
                 <h3 style={{ fontFamily: 'var(--font-mono)', fontSize: '1.1rem', textTransform: 'uppercase', marginBottom: '1rem' }}>
-                  📈 Weakness Persistence Predictions
+                  📈 Historical Topic Risk
                 </h3>
 
                 {predictions.length === 0 ? (
                   <div className="card" style={{ textAlign: 'center', padding: 'var(--space-xl)', color: 'var(--gray)' }}>
-                    Not enough session history yet to forecast weakness persistence.
+                    Not enough repeated attempts yet to estimate topic risk. A first result is not presented as a prediction.
                   </div>
                 ) : (
                   <div className="card" style={{ background: 'var(--white)' }}>
                     <p style={{ fontSize: '0.85rem', color: 'var(--dark-2)', marginBottom: '1rem' }}>
-                      Predicts how likely each weak area is to <em>remain broken</em> based on attempt count, severity, and score trend.
+                      A transparent rule-based index from observed scores, repeat attempts, and saved mistakes. This is not a trained ML prediction.
                     </p>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                       {predictions.map((p, idx) => (
@@ -304,10 +309,10 @@ export default function Dashboard({ profileId, profileData, setProfileId, setPro
                                 fontFamily: 'var(--font-mono)', 
                                 fontWeight: 700, 
                                 fontSize: '0.85rem',
-                                color: p.persistence_probability > 0.65 ? 'var(--pink)' : p.persistence_probability > 0.4 ? '#d97706' : 'var(--lime-dark)'
+                                color: p.risk_score >= 60 ? 'var(--pink)' : p.risk_score >= 30 ? '#d97706' : 'var(--lime-dark)'
                               }}
                             >
-                              {Math.round(p.persistence_probability * 100)}% Failure Risk
+                              {p.risk_score}/100 · {p.risk_level.toUpperCase()} HISTORICAL RISK
                             </span>
                           </div>
                           
@@ -315,8 +320,8 @@ export default function Dashboard({ profileId, profileData, setProfileId, setPro
                             <div 
                               className="progress-fill" 
                               style={{ 
-                                width: `${Math.round(p.persistence_probability * 100)}%`,
-                                background: p.persistence_probability > 0.65 ? 'var(--pink)' : p.persistence_probability > 0.4 ? 'var(--yellow)' : 'var(--lime)'
+                                width: `${p.risk_score}%`,
+                                background: p.risk_score >= 60 ? 'var(--pink)' : p.risk_score >= 30 ? 'var(--yellow)' : 'var(--lime)'
                               }}
                             ></div>
                           </div>

@@ -4,11 +4,50 @@
 import { v4 as uuid } from 'uuid';
 import { query } from '../db/connection.js';
 import { getStore } from '../db/memoryStore.js';
-import { getModelProvider } from '../ai/modelProvider.js';
+import { isDatabaseEnabled } from '../db/mode.js';
+import { generateEmbedding } from './aiService.js';
 
-const USE_DB = () => !!process.env.DATABASE_URL;
+const USE_DB = isDatabaseEnabled;
 
 export async function storeMistake(profileId, sessionId, mistakeData) {
+  const normalized = (value) => String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (USE_DB()) {
+    const existing = await query(
+      `SELECT * FROM mistake_memories WHERE profile_id = $1 AND is_resolved = false
+       AND LOWER(REPLACE(topic, '-', ' ')) = LOWER(REPLACE($2, '-', ' ')) AND LOWER(mistake) = LOWER($3)
+       ORDER BY created_at DESC LIMIT 1`,
+      [profileId, mistakeData.topic, mistakeData.mistake],
+    );
+    if (existing.rows[0]) {
+      const updated = await query(
+        `UPDATE mistake_memories SET recommendation = COALESCE($2, recommendation), updated_at = NOW()
+         WHERE id = $1 RETURNING *`,
+        [existing.rows[0].id, mistakeData.recommendation],
+      );
+      return updated.rows[0];
+    }
+  } else {
+    const existing = Array.from(getStore().mistakes.values()).find((item) =>
+      item.profile_id === profileId && !item.is_resolved
+      && normalized(item.topic) === normalized(mistakeData.topic)
+      && normalized(item.mistake) === normalized(mistakeData.mistake));
+    if (existing) {
+      existing.times_tested += 1;
+      existing.recommendation = mistakeData.recommendation || existing.recommendation;
+      existing.updated_at = new Date().toISOString();
+      return existing;
+    }
+  }
+
+  // Generate vector embedding if embedding model is available
+  let embeddingVector = null;
+  try {
+    const textToEmbed = `${mistakeData.topic}: ${mistakeData.mistake}`;
+    embeddingVector = await generateEmbedding(textToEmbed);
+  } catch {
+    embeddingVector = null;
+  }
+
   const id = uuid();
   const mistake = {
     id,
@@ -26,33 +65,15 @@ export async function storeMistake(profileId, sessionId, mistakeData) {
   };
 
   if (USE_DB()) {
-    // Try to generate embedding for semantic search
-    let embedding = null;
-    try {
-      const provider = getModelProvider();
-      if (provider && typeof provider.generateEmbedding === 'function') {
-        embedding = await provider.generateEmbedding(
-          `Topic: ${mistake.topic}. Mistake: ${mistake.mistake}. ${mistake.recommendation || ''}`
-        );
-      }
-    } catch (err) {
-      console.warn('[Memory] Embedding generation failed:', err.message);
-    }
+    const vectorStr = Array.isArray(embeddingVector) && embeddingVector.length === 768
+      ? `[${embeddingVector.join(',')}]`
+      : null;
 
-    if (embedding) {
-      await query(
-        `INSERT INTO mistake_memories (id, profile_id, session_id, topic, mistake, severity, recommendation, embedding)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [id, profileId, sessionId, mistake.topic, mistake.mistake, mistake.severity, mistake.recommendation,
-         `[${embedding.join(',')}]`]
-      );
-    } else {
-      await query(
-        `INSERT INTO mistake_memories (id, profile_id, session_id, topic, mistake, severity, recommendation)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [id, profileId, sessionId, mistake.topic, mistake.mistake, mistake.severity, mistake.recommendation]
-      );
-    }
+    await query(
+      `INSERT INTO mistake_memories (id, profile_id, session_id, topic, mistake, severity, recommendation, embedding)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)`,
+      [id, profileId, sessionId, mistake.topic, mistake.mistake, mistake.severity, mistake.recommendation, vectorStr]
+    );
   } else {
     getStore().mistakes.set(id, mistake);
   }
@@ -79,7 +100,34 @@ export async function getMistakesByProfile(profileId) {
 
 export async function getRelevantMistakes(profileId, topic) {
   if (USE_DB()) {
-    // First try exact topic match
+    // 1. Try vector semantic retrieval if embedding is available
+    let topicEmbedding = null;
+    try {
+      topicEmbedding = await generateEmbedding(topic);
+    } catch {
+      topicEmbedding = null;
+    }
+
+    if (Array.isArray(topicEmbedding) && topicEmbedding.length === 768) {
+      try {
+        const vectorStr = `[${topicEmbedding.join(',')}]`;
+        const semanticResults = await query(
+          `SELECT *, (embedding <=> $3::vector) as semantic_distance
+           FROM mistake_memories
+           WHERE profile_id = $1 AND is_resolved = false AND embedding IS NOT NULL
+           ORDER BY (CASE WHEN LOWER(topic) = LOWER($2) THEN -0.4 ELSE 0.0 END) + (embedding <=> $3::vector) ASC
+           LIMIT 5`,
+          [profileId, topic, vectorStr]
+        );
+        if (semanticResults.rows.length > 0) {
+          return semanticResults.rows;
+        }
+      } catch (err) {
+        console.warn('[Memory] Semantic vector query failed, falling back to lexical:', err.message);
+      }
+    }
+
+    // 2. Exact topic match
     const exact = await query(
       `SELECT * FROM mistake_memories WHERE profile_id = $1 AND is_resolved = false AND LOWER(topic) = LOWER($2)
        ORDER BY severity DESC, created_at DESC LIMIT 5`,
@@ -87,37 +135,32 @@ export async function getRelevantMistakes(profileId, topic) {
     );
     if (exact.rows.length > 0) return exact.rows;
 
-    // Then try semantic search if embeddings exist
-    try {
-      const provider = getModelProvider();
-      if (provider && typeof provider.generateEmbedding === 'function') {
-        const queryEmbedding = await provider.generateEmbedding(topic);
-        const semantic = await query(
-          `SELECT *, 1 - (embedding <=> $2) as similarity 
-           FROM mistake_memories 
-           WHERE profile_id = $1 AND is_resolved = false AND embedding IS NOT NULL
-           ORDER BY embedding <=> $2 LIMIT 5`,
-          [profileId, `[${queryEmbedding.join(',')}]`]
-        );
-        return semantic.rows;
-      }
-    } catch (err) {
-      console.warn('[Memory] Semantic search failed:', err.message);
-    }
-
-    // Fallback: get recent unresolved mistakes
+    // 3. Hybrid lexical retrieval over topic and mistake text
     const fallback = await query(
-      `SELECT * FROM mistake_memories WHERE profile_id = $1 AND is_resolved = false 
-       ORDER BY created_at DESC LIMIT 5`,
-      [profileId]
+      `SELECT *, CASE WHEN LOWER(REPLACE(topic, '-', ' ')) = LOWER(REPLACE($2, '-', ' ')) THEN 3
+                       WHEN LOWER(REPLACE(topic, '-', ' ')) LIKE '%' || LOWER($2) || '%' OR LOWER($2) LIKE '%' || LOWER(REPLACE(topic, '-', ' ')) || '%' THEN 2
+                       WHEN LOWER(mistake || ' ' || COALESCE(recommendation, '')) LIKE '%' || LOWER($2) || '%' THEN 1 ELSE 0 END AS relevance
+       FROM mistake_memories WHERE profile_id = $1 AND is_resolved = false
+       ORDER BY relevance DESC, CASE severity WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, created_at DESC LIMIT 5`,
+      [profileId, topic]
     );
     return fallback.rows;
   }
 
-  // In-memory: simple topic matching
+  // In-memory lexical retrieval ranked by topic match, then mistake text overlap.
+  const terms = topic.toLowerCase().split(/[^a-z0-9]+/).filter((term) => term.length > 2);
   return Array.from(getStore().mistakes.values())
     .filter(m => m.profile_id === profileId && !m.is_resolved)
-    .filter(m => m.topic.toLowerCase().includes(topic.toLowerCase()) || topic.toLowerCase().includes(m.topic.toLowerCase()))
+    .map((m) => {
+      const text = `${m.topic} ${m.mistake} ${m.recommendation || ''}`.toLowerCase();
+      const exactTopic = m.topic.toLowerCase() === topic.toLowerCase() ? 3 : 0;
+      const topicMatch = m.topic.toLowerCase().includes(topic.toLowerCase()) || topic.toLowerCase().includes(m.topic.toLowerCase()) ? 2 : 0;
+      const overlap = terms.filter((term) => text.includes(term)).length;
+      return { mistake: m, relevance: Math.max(exactTopic, topicMatch) + overlap };
+    })
+    .filter((entry) => entry.relevance > 0)
+    .sort((a, b) => b.relevance - a.relevance)
+    .map((entry) => entry.mistake)
     .slice(0, 5);
 }
 
@@ -136,9 +179,43 @@ export async function updateMistake(id, updates) {
   } else {
     const mistake = getStore().mistakes.get(id);
     if (!mistake) return null;
-    Object.assign(mistake, updates, { updated_at: new Date().toISOString() });
+    if (updates.timesTested !== undefined) mistake.times_tested = updates.timesTested;
+    if (updates.timesImproved !== undefined) mistake.times_improved = updates.timesImproved;
+    if (updates.isResolved !== undefined) mistake.is_resolved = updates.isResolved;
+    Object.assign(mistake, { updated_at: new Date().toISOString() });
     return mistake;
   }
+}
+
+export async function recordTopicOutcome(profileId, topic, score, previousScore) {
+  if (previousScore == null) return [];
+  const improved = score > Number(previousScore);
+  const resolved = score >= 80;
+  if (USE_DB()) {
+    const result = await query(
+      `UPDATE mistake_memories SET times_tested = times_tested + 1,
+        times_improved = times_improved + $3,
+        is_resolved = CASE WHEN $4 THEN true ELSE is_resolved END,
+        updated_at = NOW()
+       WHERE profile_id = $1 AND LOWER(REPLACE(topic, '-', ' ')) = LOWER(REPLACE($2, '-', ' ')) AND is_resolved = false RETURNING *`,
+      [profileId, topic, improved ? 1 : 0, resolved],
+    );
+    return result.rows;
+  }
+  const changed = [];
+  for (const mistake of getStore().mistakes.values()) {
+    if (mistake.profile_id !== profileId || mistake.is_resolved || normalizedTopic(mistake.topic) !== normalizedTopic(topic)) continue;
+    mistake.times_tested += 1;
+    if (improved) mistake.times_improved += 1;
+    if (resolved) mistake.is_resolved = true;
+    mistake.updated_at = new Date().toISOString();
+    changed.push(mistake);
+  }
+  return changed;
+}
+
+function normalizedTopic(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
 export async function getMistakeStats(profileId) {

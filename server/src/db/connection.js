@@ -2,17 +2,18 @@
 // Database Connection — Neon PostgreSQL
 // ============================================
 import pg from 'pg';
+import { isDatabaseEnabled } from './mode.js';
 const { Pool } = pg;
 
 let pool = null;
 
 export function getPool() {
   if (!pool) {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) {
-      console.warn('[DB] No DATABASE_URL set — using in-memory fallback');
+    if (!isDatabaseEnabled()) {
+      console.warn('[DB] PostgreSQL is opt-in; using in-memory fallback');
       return null;
     }
+    const connectionString = process.env.DATABASE_URL;
     pool = new Pool({
       connectionString,
       ssl: { rejectUnauthorized: false },

@@ -4,8 +4,9 @@
 import { v4 as uuid } from 'uuid';
 import { query } from '../db/connection.js';
 import { getStore } from '../db/memoryStore.js';
+import { isDatabaseEnabled } from '../db/mode.js';
 
-const USE_DB = () => !!process.env.DATABASE_URL;
+const USE_DB = isDatabaseEnabled;
 
 export async function createProfile(data) {
   const id = uuid();

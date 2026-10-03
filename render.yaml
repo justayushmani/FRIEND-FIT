@@ -1,0 +1,39 @@
+services:
+  # FriendFit Backend API Service
+  - type: web
+    name: friendfit-backend
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: CORS_ORIGIN
+        sync: false
+      - key: DATABASE_MODE
+        value: postgres
+      - key: DATABASE_URL
+        sync: false
+      - key: AI_MODE
+        value: hosted
+      - key: GOOGLE_AI_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+
+  # FriendFit Frontend Static Site
+  - type: web
+    name: friendfit-frontend
+    runtime: static
+    plan: free
+    rootDir: client
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false

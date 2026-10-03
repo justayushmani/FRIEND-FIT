@@ -3,16 +3,30 @@
 // ============================================
 import { Router } from 'express';
 import { createProfile, getProfile, updateProfile, getAllProfiles } from '../services/profileService.js';
+import { z } from 'zod';
 
 export const profileRouter = Router();
+const projectSchema = z.object({
+  name: z.string().trim().max(160).optional(),
+  tech: z.union([z.string().max(500), z.array(z.string().max(80)).max(30)]).optional(),
+  description: z.string().max(2000).optional(),
+});
+const profileSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  targetRole: z.string().trim().max(160).optional(),
+  skills: z.array(z.string().trim().min(1).max(80)).max(40).optional(),
+  weakAreas: z.array(z.string().trim().min(1).max(120)).max(40).optional(),
+  projects: z.array(projectSchema).max(20).optional(),
+  resumeText: z.string().max(12000).optional(),
+  jobDescription: z.string().max(12000).optional(),
+});
 
 // Create profile
 profileRouter.post('/', async (req, res, next) => {
   try {
-    const { name, targetRole, skills, weakAreas, projects, resumeText, jobDescription } = req.body;
-    if (!name || name.trim().length === 0) {
-      return res.status(400).json({ error: 'Name is required' });
-    }
+    const parsed = profileSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid profile', details: parsed.error.issues });
+    const { name, targetRole, skills, weakAreas, projects, resumeText, jobDescription } = parsed.data;
     const profile = await createProfile({
       name: name.trim(),
       targetRole, skills, weakAreas, projects, resumeText, jobDescription
@@ -47,7 +61,9 @@ profileRouter.get('/:id', async (req, res, next) => {
 // Update profile
 profileRouter.put('/:id', async (req, res, next) => {
   try {
-    const updated = await updateProfile(req.params.id, req.body);
+    const parsed = profileSchema.partial().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid profile', details: parsed.error.issues });
+    const updated = await updateProfile(req.params.id, parsed.data);
     if (!updated) return res.status(404).json({ error: 'Profile not found' });
     res.json(updated);
   } catch (err) {

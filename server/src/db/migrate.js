@@ -161,7 +161,7 @@ CREATE INDEX IF NOT EXISTS idx_recommendations_profile ON recommendations(profil
 async function migrate() {
   const pool = getPool();
   if (!pool) {
-    console.error('[Migration] No DATABASE_URL configured. Set it in .env');
+    console.error('[Migration] PostgreSQL is disabled. Set DATABASE_MODE=postgres and DATABASE_URL to migrate.');
     process.exit(1);
   }
 

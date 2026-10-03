@@ -22,14 +22,8 @@ export default function Analysis({ profileId }) {
         setError(null);
 
         const [analysisRes, sessionRes] = await Promise.all([
-          api.getAnalysis(sessionId).catch(err => {
-            console.warn('Analysis fetch error:', err);
-            return null;
-          }),
-          api.getSession(sessionId).catch(err => {
-            console.warn('Session fetch error:', err);
-            return null;
-          })
+          api.getAnalysis(sessionId),
+          api.getSession(sessionId),
         ]);
 
         if (!mounted) return;
@@ -49,12 +43,7 @@ export default function Analysis({ profileId }) {
   }, [sessionId]);
 
   const overallScore = analysis?.overallScore ?? sessionData?.session?.overall_score ?? 0;
-  const categories = analysis?.categories || [
-    { name: 'Technical Knowledge', score: overallScore },
-    { name: 'Answer Clarity', score: Math.max(overallScore - 5, 0) },
-    { name: 'Problem Solving', score: Math.min(overallScore + 4, 100) },
-    { name: 'Communication', score: Math.max(overallScore - 2, 0) }
-  ];
+  const categories = analysis?.categories || [];
 
   return (
     <div className="analysis-page">
@@ -76,6 +65,12 @@ export default function Analysis({ profileId }) {
         ) : (
           <>
             {/* Header */}
+            {!analysis ? (
+              <div className="error-banner" role="alert">
+                <span>Analysis is unavailable because a validated local Gemma result was not returned. No substitute scores were created.</span>
+                <button className="btn btn-sm btn-secondary" onClick={() => navigate('/dashboard')}>Go to Dashboard</button>
+              </div>
+            ) : <>
             <div className="analysis-header">
               <span className="badge badge-lime" style={{ marginBottom: '0.75rem' }}>
                 SESSION AUDIT COMPLETE
@@ -101,9 +96,7 @@ export default function Analysis({ profileId }) {
                 <span style={{ fontSize: '2rem', color: 'var(--gray)' }}>/100</span>
               </div>
               <p style={{ marginTop: '0.75rem', maxWidth: '600px', textAlign: 'center', color: 'var(--dark-2)', fontSize: '1.05rem', lineHeight: 1.5 }}>
-                {analysis?.summary || (overallScore >= 75 
-                  ? 'Strong performance across core technical concepts with clear answers.'
-                  : 'Good foundation demonstrated, but recurring weaknesses in trade-off analysis require targeted drills.')}
+                {analysis.summary}
               </p>
             </div>
 
@@ -154,11 +147,7 @@ export default function Analysis({ profileId }) {
                 Coach Action Plan
               </h3>
               <div className="recommendations-list">
-                {(analysis?.recommendations || [
-                  'Practice PostgreSQL vs MongoDB comparison drills emphasizing ACID transactions',
-                  'Work on structured query optimization using EXPLAIN ANALYZE',
-                  'Formulate system design answers starting with quantitative traffic calculations'
-                ]).map((rec, idx) => (
+                {analysis.recommendations.map((rec, idx) => (
                   <div key={idx} className="recommendation-item">
                     <div className="rec-number">{idx + 1}</div>
                     <div style={{ flex: 1 }}>
@@ -219,6 +208,7 @@ export default function Analysis({ profileId }) {
                 🚀 Start Another Practice Session
               </button>
             </div>
+            </>}
           </>
         )}
       </main>

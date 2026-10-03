@@ -1,11 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useTimer } from '../hooks';
 
 export default function PracticeRoom({ profileId, profileData }) {
   const navigate = useNavigate();
-  const location = useLocation();
+
+  // URL params for targeted drills
+  const searchParams = new URLSearchParams(window.location.search);
+  const targetTopic = searchParams.get('topic');
 
   // Session state
   const [sessionId, setSessionId] = useState(null);
@@ -17,14 +20,53 @@ export default function PracticeRoom({ profileId, profileData }) {
   const [evaluation, setEvaluation] = useState(null);
   const [questionCount, setQuestionCount] = useState(0);
   const [error, setError] = useState(null);
+  const [aiStatus, setAiStatus] = useState(null);
 
-  // Speech Recognition
+  // Voice recording (ElevenLabs STT with browser SpeechRecognition fallback)
   const [isRecording, setIsRecording] = useState(false);
+  const [voiceProcessing, setVoiceProcessing] = useState(false);
+  const [voiceMode, setVoiceMode] = useState('browser'); // 'elevenlabs' | 'browser'
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
   const recognitionRef = useRef(null);
 
   // Timers
   const sessionTimer = useTimer(true);
-  const [questionStartTime, setQuestionStartTime] = useState(Date.now());
+  const [questionStartTime, setQuestionStartTime] = useState(0);
+
+  // Check health on mount
+  useEffect(() => {
+    api.health()
+      .then((health) => {
+        setAiStatus(health.ai || null);
+        if (health.voice?.available) {
+          setVoiceMode('elevenlabs');
+        }
+      })
+      .catch(() => setAiStatus({ available: false }));
+  }, []);
+
+  // Load next question. Pass the session explicitly so the initializer has no stale state closure.
+  const loadNextQuestion = useCallback(async (sId, requestedTopic = null) => {
+    if (!sId) return;
+
+    try {
+      setQuestionLoading(true);
+      setError(null);
+      setEvaluation(null);
+      setAnswerText('');
+
+      const q = await api.getQuestion(sId, requestedTopic);
+      setCurrentQuestion(q);
+      setQuestionCount(prev => prev + 1);
+      setQuestionStartTime(Date.now());
+    } catch (err) {
+      console.error('Failed to get question:', err);
+      setError(err.message || 'Failed to fetch next question');
+    } finally {
+      setQuestionLoading(false);
+    }
+  }, []);
 
   // Initialize or start session
   useEffect(() => {
@@ -39,13 +81,17 @@ export default function PracticeRoom({ profileId, profileData }) {
       try {
         setSessionLoading(true);
         setError(null);
-        // Start new session
-        const session = await api.startSession(profileId, 'interview');
+        // Start new session (pass targetTopic if user clicked NBA drill CTA)
+        const session = await api.startSession(
+          profileId,
+          targetTopic ? 'targeted-drill' : 'interview',
+          targetTopic
+        );
         if (!mounted) return;
         setSessionId(session.id);
         
-        // Fetch first question
-        await loadNextQuestion(session.id);
+        // Fetch first question with the target topic
+        await loadNextQuestion(session.id, targetTopic);
       } catch (err) {
         if (!mounted) return;
         console.error('Session init error:', err);
@@ -62,78 +108,117 @@ export default function PracticeRoom({ profileId, profileData }) {
       if (recognitionRef.current) {
         recognitionRef.current.abort();
       }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
     };
-  }, [profileId]);
+  }, [profileId, targetTopic, loadNextQuestion]);
 
-  // Load next question
-  const loadNextQuestion = async (sid) => {
-    const sId = sid || sessionId;
-    if (!sId) return;
-
-    try {
-      setQuestionLoading(true);
-      setError(null);
-      setEvaluation(null);
-      setAnswerText('');
-
-      const q = await api.getQuestion(sId);
-      setCurrentQuestion(q);
-      setQuestionCount(prev => prev + 1);
-      setQuestionStartTime(Date.now());
-    } catch (err) {
-      console.error('Failed to get question:', err);
-      setError(err.message || 'Failed to fetch next question');
-    } finally {
-      setQuestionLoading(false);
+  // Toggle Voice Recording
+  const toggleVoiceRecording = async () => {
+    if (isRecording) {
+      // Stop recording
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsRecording(false);
+      return;
     }
+
+    // Attempt ElevenLabs voice via MediaRecorder if supported
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && voiceMode === 'elevenlabs') {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioChunksRef.current = [];
+        const mediaRecorder = new MediaRecorder(stream);
+        mediaRecorderRef.current = mediaRecorder;
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) audioChunksRef.current.push(event.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach((track) => track.stop());
+          const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+          if (audioBlob.size < 100) return;
+
+          try {
+            setVoiceProcessing(true);
+            const reader = new FileReader();
+            reader.readAsDataURL(audioBlob);
+            reader.onloadend = async () => {
+              const base64Audio = reader.result.split(',')[1];
+              try {
+                const res = await api.transcribeAudio(base64Audio, 'audio/webm');
+                if (res?.text) {
+                  setAnswerText((prev) => (prev ? prev + ' ' : '') + res.text.trim());
+                }
+              } catch (transcribeErr) {
+                console.warn('ElevenLabs STT error, falling back to browser:', transcribeErr.message);
+                fallbackBrowserRecognition();
+              } finally {
+                setVoiceProcessing(false);
+              }
+            };
+          } catch (err) {
+            console.error('Audio processing failed:', err);
+            setVoiceProcessing(false);
+          }
+        };
+
+        mediaRecorder.start(250);
+        setIsRecording(true);
+        return;
+      } catch (micErr) {
+        console.warn('MediaRecorder error, falling back to Web Speech API:', micErr.message);
+      }
+    }
+
+    // Fallback: Browser Web Speech API
+    fallbackBrowserRecognition();
   };
 
-  // Toggle Voice Recognition
-  const toggleSpeechRecognition = () => {
+  const fallbackBrowserRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       alert('Speech recognition is not supported in this browser. You can type your answer in the box!');
       return;
     }
 
-    if (isRecording) {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-      setIsRecording(false);
-    } else {
-      try {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = 'en-US';
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
 
-        recognition.onresult = (event) => {
-          let currentTranscript = '';
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            currentTranscript += event.results[i][0].transcript;
-          }
-          if (event.results[event.resultIndex].isFinal) {
-            setAnswerText(prev => (prev ? prev + ' ' : '') + currentTranscript.trim());
-          }
-        };
+      recognition.onresult = (event) => {
+        let currentTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          currentTranscript += event.results[i][0].transcript;
+        }
+        if (event.results[event.resultIndex].isFinal) {
+          setAnswerText((prev) => (prev ? prev + ' ' : '') + currentTranscript.trim());
+        }
+      };
 
-        recognition.onerror = (event) => {
-          console.error('Speech recognition error:', event.error);
-          setIsRecording(false);
-        };
-
-        recognition.onend = () => {
-          setIsRecording(false);
-        };
-
-        recognition.start();
-        recognitionRef.current = recognition;
-        setIsRecording(true);
-      } catch (err) {
-        console.error('Speech recognition start failed:', err);
+      recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
         setIsRecording(false);
-      }
+      };
+
+      recognition.onend = () => {
+        setIsRecording(false);
+      };
+
+      recognition.start();
+      recognitionRef.current = recognition;
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Speech recognition start failed:', err);
+      setIsRecording(false);
     }
   };
 
@@ -141,8 +226,13 @@ export default function PracticeRoom({ profileId, profileData }) {
   const handleSubmitAnswer = async () => {
     if (!answerText.trim() || !currentQuestion || !sessionId) return;
 
-    if (isRecording && recognitionRef.current) {
-      recognitionRef.current.stop();
+    if (isRecording) {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
       setIsRecording(false);
     }
 
@@ -163,8 +253,14 @@ export default function PracticeRoom({ profileId, profileData }) {
 
   // End Session & Navigate to Analysis
   const handleEndSession = async () => {
-    if (isRecording && recognitionRef.current) {
-      recognitionRef.current.stop();
+    if (isRecording) {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      setIsRecording(false);
     }
 
     if (!sessionId) {
@@ -206,7 +302,7 @@ export default function PracticeRoom({ profileId, profileData }) {
                 }
               }}
             >
-              Load Ayush Demo
+              Load Sample Demo
             </button>
           </div>
         </div>
@@ -218,7 +314,7 @@ export default function PracticeRoom({ profileId, profileData }) {
     <div className="practice-room">
       {/* Top Bar */}
       <header className="practice-topbar">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
           <button
             className="btn btn-sm"
             style={{ background: 'var(--dark-3)', color: 'var(--cream)', border: '1px solid var(--gray)' }}
@@ -233,11 +329,26 @@ export default function PracticeRoom({ profileId, profileData }) {
           <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '0.9rem', color: 'var(--lime)' }}>
             FRIEND•FIT ROOM
           </span>
+          {aiStatus?.available ? (
+            <span className="badge badge-cyan" aria-label="AI is active">
+              ● {aiStatus.local ? 'LOCAL GEMMA' : `GOOGLE AI (${aiStatus.model || 'API'})`}
+            </span>
+          ) : (
+            <span className="badge badge-pink" style={{ background: '#f43f5e', color: '#fff' }}>
+              ● AI OFFLINE
+            </span>
+          )}
+          {targetTopic && (
+            <span className="badge badge-lime" style={{ fontSize: '0.7rem' }}>
+              🎯 TARGET: {targetTopic.toUpperCase()}
+            </span>
+          )}
           {profileData && (
             <span className="badge badge-yellow" style={{ fontSize: '0.7rem' }}>
               👤 {profileData.name}
             </span>
           )}
+          {String(profileId).startsWith('demo-') && <span className="badge badge-yellow">SAMPLE DATA</span>}
         </div>
 
         <div className="practice-meta">
@@ -307,7 +418,7 @@ export default function PracticeRoom({ profileId, profileData }) {
               <div className="answer-area">
                 <textarea
                   className="answer-textarea"
-                  placeholder="Type your response here, or tap the microphone below to speak your answer naturally..."
+                  placeholder="Type your response here, or use voice transcription..."
                   value={answerText}
                   onChange={(e) => setAnswerText(e.target.value)}
                   disabled={submittingAnswer}
@@ -318,14 +429,18 @@ export default function PracticeRoom({ profileId, profileData }) {
                     <button
                       type="button"
                       className={`mic-btn ${isRecording ? 'recording' : ''}`}
-                      onClick={toggleSpeechRecognition}
+                      onClick={toggleVoiceRecording}
                       title={isRecording ? 'Click to Stop Recording' : 'Click to Speak Answer'}
-                      disabled={submittingAnswer}
+                      disabled={submittingAnswer || voiceProcessing}
                     >
-                      {isRecording ? '⏹' : '🎙️'}
+                      {voiceProcessing ? '⏳' : isRecording ? '⏹' : '🎙️'}
                     </button>
                     <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: isRecording ? 'var(--pink)' : 'var(--gray-light)' }}>
-                      {isRecording ? 'LISTENING... (SPEAK FREELY)' : 'TAP TO DICTATE ANSWER'}
+                      {voiceProcessing
+                        ? 'TRANSCRIBING WITH ELEVENLABS...'
+                        : isRecording
+                        ? (voiceMode === 'elevenlabs' ? 'RECORDING (ELEVENLABS)...' : 'RECORDING (BROWSER DICTATION)...')
+                        : (voiceMode === 'elevenlabs' ? 'ELEVENLABS VOICE' : 'VOICE DICTATION')}
                     </span>
                   </div>
 
@@ -333,7 +448,7 @@ export default function PracticeRoom({ profileId, profileData }) {
                     className="btn btn-primary"
                     style={{ fontSize: '1rem', padding: '0.75rem 1.75rem' }}
                     onClick={handleSubmitAnswer}
-                    disabled={submittingAnswer || !answerText.trim()}
+                    disabled={submittingAnswer || !answerText.trim() || voiceProcessing}
                   >
                     {submittingAnswer ? 'Evaluating Answer...' : 'Submit Answer →'}
                   </button>
@@ -355,7 +470,7 @@ export default function PracticeRoom({ profileId, profileData }) {
                   <div style={{ display: 'flex', gap: '0.75rem' }}>
                     <button
                       className="btn btn-secondary"
-                      onClick={() => loadNextQuestion()}
+                      onClick={() => loadNextQuestion(sessionId)}
                     >
                       Next Question →
                     </button>
@@ -372,6 +487,12 @@ export default function PracticeRoom({ profileId, profileData }) {
                   <strong style={{ color: 'var(--cream)', display: 'block', marginBottom: '0.25rem' }}>AI Feedback:</strong>
                   {evaluation.feedback}
                 </div>
+                {evaluation.followUpNeeded && evaluation.followUpQuestion && (
+                  <div className="feedback-text">
+                    <strong style={{ color: 'var(--cream)', display: 'block', marginBottom: '0.25rem' }}>Suggested follow-up:</strong>
+                    {evaluation.followUpQuestion}
+                  </div>
+                )}
 
                 {/* Strengths & Weaknesses Pills */}
                 <div className="feedback-pills">
@@ -396,7 +517,7 @@ export default function PracticeRoom({ profileId, profileData }) {
             <div className="empty-icon">🎯</div>
             <h3 className="empty-title" style={{ color: 'var(--cream)' }}>Session Ready</h3>
             <p className="empty-text">Click below to start practicing with adaptive questions.</p>
-            <button className="btn btn-primary" onClick={() => loadNextQuestion()}>
+            <button className="btn btn-primary" onClick={() => loadNextQuestion(sessionId, targetTopic)}>
               Get First Question
             </button>
           </div>

@@ -2,16 +2,16 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 
-export default function Navbar({ profileId, profileData, onProfileChange }) {
+export default function Navbar({ profileData, onProfileChange }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [isDemoLoading, setIsDemoLoading] = useState(false);
-  const [serverOnline, setServerOnline] = useState(true);
+  const [aiStatus, setAiStatus] = useState(null);
 
   useEffect(() => {
     api.health()
-      .then(() => setServerOnline(true))
-      .catch(() => setServerOnline(false));
+      .then((health) => setAiStatus(health.ai || null))
+      .catch(() => setAiStatus({ available: false }));
   }, []);
 
   const handleSeedDemo = async () => {
@@ -54,7 +54,7 @@ export default function Navbar({ profileId, profileData, onProfileChange }) {
           className="btn btn-sm btn-secondary"
           onClick={handleSeedDemo}
           disabled={isDemoLoading}
-          title="Load Ayush's 2-session history with mistakes and next best action"
+          title="Load clearly labeled sample history, mistakes, and next best action"
           style={{ marginLeft: '0.5rem' }}
         >
           {isDemoLoading ? 'Loading Demo...' : '⚡ Demo Mode'}
@@ -66,9 +66,20 @@ export default function Navbar({ profileId, profileData, onProfileChange }) {
           </span>
         )}
 
-        <div className="navbar-mode" title={serverOnline ? 'AI Backend Online' : 'AI Backend Offline / Fallback'}>
-          <div className={`mode-dot ${serverOnline ? '' : 'offline'}`}></div>
-          <span className="mode-label">{serverOnline ? 'AI LIVE' : 'OFFLINE'}</span>
+        <div
+          className="navbar-mode"
+          title={
+            aiStatus?.available
+              ? (aiStatus.local ? `Local Gemma running (${aiStatus.model})` : `Google AI Studio (${aiStatus.model})`)
+              : 'AI service is currently offline or model not installed.'
+          }
+        >
+          <div className={`mode-dot ${aiStatus?.available ? '' : 'offline'}`}></div>
+          <span className="mode-label">
+            {aiStatus?.available
+              ? (aiStatus.local ? 'LOCAL GEMMA' : `GOOGLE AI (${aiStatus.model || 'HOSTED'})`)
+              : 'AI OFFLINE'}
+          </span>
         </div>
       </div>
     </nav>

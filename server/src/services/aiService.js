@@ -1,265 +1,106 @@
-// ============================================
-// AI Service — Question Generation & Answer Evaluation
-// ============================================
+import { z } from 'zod';
 import { getModelProvider } from '../ai/modelProvider.js';
 
+const QuestionSchema = z.object({
+  question: z.string().min(12),
+  topic: z.string().min(1),
+  difficulty: z.enum(['easy', 'medium', 'hard']),
+  reason: z.string().min(1),
+});
+
+const EvaluationSchema = z.object({
+  score: z.number().min(0).max(100),
+  correct: z.boolean(),
+  strengths: z.array(z.string()),
+  weaknesses: z.array(z.string()),
+  concept_gaps: z.array(z.string()),
+  follow_up_needed: z.boolean(),
+  feedback: z.string().min(1),
+  follow_up_question: z.string().optional().nullable(),
+});
+
+const AnalysisSchema = z.object({
+  overall_score: z.number().min(0).max(100),
+  categories: z.array(z.object({
+    name: z.string().min(1), score: z.number().min(0).max(100), detail: z.string(),
+  })).min(1),
+  key_weaknesses: z.array(z.string()),
+  recommendations: z.array(z.string()),
+  summary: z.string().min(1),
+});
+
+const provider = () => getModelProvider();
+
 export async function generateQuestion(profile, sessionHistory, mistakes, questionNumber) {
-  const provider = getModelProvider();
-  if (!provider) throw new Error('AI provider not configured');
-
-  const mistakeContext = mistakes.length > 0
-    ? `\nPREVIOUS WEAKNESSES (test these when relevant):\n${mistakes.map(m => `- Topic: ${m.topic}, Mistake: ${m.mistake}, Severity: ${m.severity}`).join('\n')}`
+  const memory = mistakes.length
+    ? `\nPREVIOUS WEAKNESSES TO REVISIT WHEN RELEVANT:\n${mistakes.map((m) => `- ${m.topic}: ${m.mistake} (${m.severity})`).join('\n')}`
     : '';
-
-  const historyContext = sessionHistory.length > 0
-    ? `\nPREVIOUS Q&A IN THIS SESSION:\n${sessionHistory.map((h, i) => `Q${i + 1}: ${h.question}\nA: ${h.answer}\nScore: ${h.score}/100`).join('\n\n')}`
+  const history = sessionHistory.length
+    ? `\nCURRENT SESSION:\n${sessionHistory.map((h, i) => `Q${i + 1}: ${h.question}\nAnswer: ${h.answer}\nScore: ${h.score}/100`).join('\n\n')}`
     : '';
-
-  const prompt = `You are FriendFit, a personalized interview practice coach. You are coaching ${profile.name} who is preparing for a ${profile.target_role || 'software engineering'} role.
-
-THEIR PROFILE:
-- Skills: ${(profile.skills || []).join(', ') || 'Not specified'}
-- Weak areas: ${(profile.weak_areas || []).join(', ') || 'Not specified'}
-- Projects: ${JSON.stringify(profile.projects || [])}
-${profile.resume_text ? `- Resume summary: ${profile.resume_text.substring(0, 500)}` : ''}
-${profile.job_description ? `- Target job: ${profile.job_description.substring(0, 300)}` : ''}
-${mistakeContext}
-${historyContext}
-
-This is question #${questionNumber} of the session.
-
-Generate a single interview practice question that:
-1. Is relevant to their target role and skills
-2. If there are previous weaknesses, consider testing one of them
-3. Adapts difficulty based on previous answers in this session
-4. Is specific and requires a thoughtful answer (not a yes/no question)
-5. If they just answered a question, consider a follow-up that digs deeper
-
-Respond with this exact JSON structure:
-{
-  "question": "the interview question",
-  "topic": "the main topic (e.g., databases, system design, algorithms)",
-  "difficulty": "easy" | "medium" | "hard",
-  "reason": "brief reason why this question was chosen"
-}`;
-
-  const schema = {
-    question: 'string',
-    topic: 'string',
-    difficulty: 'string',
-    reason: 'string'
-  };
-
-  try {
-    const result = await provider.generateJSON(prompt, schema, { temperature: 0.7 });
-    // Validate required fields
-    if (!result.question || !result.topic) {
-      throw new Error('Missing required fields in question response');
-    }
-    return {
-      question: result.question,
-      topic: result.topic,
-      difficulty: result.difficulty || 'medium',
-      reason: result.reason || 'Selected based on profile'
-    };
-  } catch (err) {
-    console.error('[AI] Question generation failed:', err.message);
-    // Fallback question
-    return {
-      question: `Tell me about a challenging technical problem you solved recently and how you approached it.`,
-      topic: 'problem-solving',
-      difficulty: 'medium',
-      reason: 'Fallback question (AI generation failed)'
-    };
-  }
+  const prompt = `You are FriendFit, an interview coach. Create question ${questionNumber} for ${profile.name}, preparing for ${profile.target_role || 'a software engineering'} role.
+Skills: ${(profile.skills || []).join(', ') || 'unspecified'}
+Weak areas: ${(profile.weak_areas || []).join(', ') || 'unspecified'}
+Projects: ${JSON.stringify(profile.projects || [])}
+${profile.resume_text ? `Resume context: ${profile.resume_text.slice(0, 500)}` : ''}
+${profile.job_description ? `Job context: ${profile.job_description.slice(0, 300)}` : ''}
+${memory}${history}
+Ask one specific, open-ended technical interview question. Adapt difficulty to prior answers and target a relevant recurring weakness when appropriate. Return JSON with question, topic, difficulty (easy, medium, or hard), and reason.`;
+  return provider().generateJSON(prompt, QuestionSchema, { temperature: 0.5 });
 }
 
 export async function evaluateAnswer(question, answer, profile) {
-  const provider = getModelProvider();
-  if (!provider) throw new Error('AI provider not configured');
-
-  const prompt = `You are FriendFit, a tough but fair interview coach evaluating ${profile.name}'s answer.
-
-QUESTION: ${question.question_text || question.question}
-TOPIC: ${question.topic_name || question.topic}
-DIFFICULTY: ${question.difficulty}
-THEIR ROLE TARGET: ${profile.target_role || 'software engineer'}
-
-THEIR ANSWER: ${answer}
-
-Evaluate this answer carefully. Be honest and specific.
-
-Score from 0-100 where:
-- 0-30: Very weak, major gaps
-- 31-50: Below average, significant issues
-- 51-70: Adequate but could be improved
-- 71-85: Good, minor improvements possible
-- 86-100: Excellent, comprehensive answer
-
-Respond with this exact JSON structure:
-{
-  "score": <number 0-100>,
-  "correct": <boolean>,
-  "strengths": ["strength 1", "strength 2"],
-  "weaknesses": ["weakness 1", "weakness 2"],
-  "concept_gaps": ["gap 1"],
-  "follow_up_needed": <boolean>,
-  "feedback": "2-3 sentence constructive feedback",
-  "follow_up_question": "optional follow-up question if follow_up_needed is true"
-}`;
-
-  const schema = {
-    score: 'number',
-    correct: 'boolean',
-    strengths: ['string'],
-    weaknesses: ['string'],
-    concept_gaps: ['string'],
-    follow_up_needed: 'boolean',
-    feedback: 'string'
+  const prompt = `You are FriendFit, a fair and specific interview coach evaluating ${profile.name} for ${profile.target_role || 'a software engineering'}.
+Question: ${question.question_text || question.question}
+Topic: ${question.topic_name || question.topic}; difficulty: ${question.difficulty}
+Answer: ${answer}
+Score this answer from 0 to 100 based on correctness, reasoning, specificity, and completeness. Do not reward length by itself. Return JSON with score, correct, strengths (array), weaknesses (array), concept_gaps (array), follow_up_needed, feedback (2-3 concise sentences), and optional follow_up_question.`;
+  const result = await provider().generateJSON(prompt, EvaluationSchema, { temperature: 0.2 });
+  return {
+    score: result.score,
+    correct: result.correct,
+    strengths: result.strengths,
+    weaknesses: result.weaknesses,
+    conceptGaps: result.concept_gaps,
+    followUpNeeded: result.follow_up_needed,
+    feedback: result.feedback,
+    followUpQuestion: result.follow_up_question || null,
   };
-
-  try {
-    const result = await provider.generateJSON(prompt, schema, { temperature: 0.3 });
-    return {
-      score: Math.min(100, Math.max(0, result.score || 50)),
-      correct: result.correct ?? true,
-      strengths: result.strengths || [],
-      weaknesses: result.weaknesses || [],
-      conceptGaps: result.concept_gaps || result.conceptGaps || [],
-      followUpNeeded: result.follow_up_needed || result.followUpNeeded || false,
-      feedback: result.feedback || 'Answer evaluated.',
-      followUpQuestion: result.follow_up_question || null,
-    };
-  } catch (err) {
-    console.error('[AI] Answer evaluation failed:', err.message);
-    const wordCount = (answer || '').trim().split(/\s+/).filter(Boolean).length;
-    const hasDetail = wordCount >= 20;
-    const baseScore = hasDetail ? Math.min(85, 55 + Math.floor(wordCount / 3)) : Math.max(35, wordCount * 5);
-    
-    return {
-      score: baseScore,
-      correct: baseScore >= 50,
-      strengths: hasDetail 
-        ? ['Clear explanation of concepts', 'Good depth in response']
-        : ['Provided a direct response'],
-      weaknesses: hasDetail
-        ? ['Could include more concrete code or architecture examples']
-        : ['Answer is brief; consider elaborating with specific technical details'],
-      conceptGaps: hasDetail ? [] : ['Lacks detailed trade-off analysis'],
-      followUpNeeded: true,
-      feedback: hasDetail
-        ? `Solid explanation with good structure. To improve, touch on specific edge cases, trade-offs, or real-world production metrics.`
-        : `Your answer covers the basics but is concise. Expanding on practical implementation details will make your interview answer much stronger.`,
-      followUpQuestion: `Can you elaborate on how you would handle performance or edge cases in this setup?`,
-    };
-  }
 }
 
 export async function generateSessionAnalysis(profile, answers) {
-  const provider = getModelProvider();
-  if (!provider) throw new Error('AI provider not configured');
-
-  const answerSummary = answers.map((a, i) => 
-    `Q${i + 1} [${a.topic_name || 'general'}]: Score ${a.score}/100 — ${a.feedback || 'No feedback'}`
+  const answerSummary = answers.map((a, i) =>
+    `Q${i + 1} [${a.topic_name || 'general'}]: ${a.score}/100 — ${a.feedback || 'No feedback'}`
   ).join('\n');
+  const prompt = `Summarize ${profile.name}'s practice session using only this evidence:\n${answerSummary}\nReturn JSON with overall_score (0-100), categories (name, score 0-100, detail), key_weaknesses, recommendations, and a concise summary.`;
+  const result = await provider().generateJSON(prompt, AnalysisSchema, { temperature: 0.2 });
+  return {
+    overallScore: result.overall_score,
+    categories: result.categories,
+    keyWeaknesses: result.key_weaknesses,
+    recommendations: result.recommendations,
+    summary: result.summary,
+  };
+}
 
-  const prompt = `You are FriendFit analyzing ${profile.name}'s practice session.
+// Mistake extraction uses the model's already validated evaluation, avoiding a second inference.
+export async function extractMistakes(question, evaluation) {
+  if (evaluation.score >= 80 && evaluation.weaknesses.length === 0 && evaluation.conceptGaps.length === 0) return [];
+  const topic = question.topic_name || question.topic || 'general';
+  const gaps = [...new Set([...evaluation.conceptGaps, ...evaluation.weaknesses])].slice(0, 3);
+  return gaps.map((gap) => ({
+    topic,
+    mistake: gap,
+    severity: evaluation.score < 45 ? 'high' : evaluation.score < 65 ? 'medium' : 'low',
+    recommendation: evaluation.feedback,
+  }));
+}
 
-SESSION RESULTS:
-${answerSummary}
-
-Generate a performance analysis with category scores and recommendations.
-
-Respond with this exact JSON:
-{
-  "overall_score": <number 0-100>,
-  "categories": [
-    {"name": "Technical Knowledge", "score": <number>, "detail": "brief note"},
-    {"name": "Answer Clarity", "score": <number>, "detail": "brief note"},
-    {"name": "Problem Solving", "score": <number>, "detail": "brief note"},
-    {"name": "Communication", "score": <number>, "detail": "brief note"}
-  ],
-  "key_weaknesses": ["weakness 1", "weakness 2"],
-  "recommendations": [
-    "specific recommendation 1",
-    "specific recommendation 2",
-    "specific recommendation 3"
-  ],
-  "summary": "2-3 sentence summary of the session"
-}`;
-
+export async function generateEmbedding(text) {
   try {
-    const result = await provider.generateJSON(prompt, {}, { temperature: 0.3 });
-    return {
-      overallScore: result.overall_score || 50,
-      categories: result.categories || [],
-      keyWeaknesses: result.key_weaknesses || [],
-      recommendations: result.recommendations || [],
-      summary: result.summary || 'Session completed.',
-    };
-  } catch (err) {
-    console.error('[AI] Session analysis failed:', err.message);
-    // Calculate from raw scores
-    const avgScore = answers.length > 0
-      ? Math.round(answers.reduce((sum, a) => sum + (a.score || 50), 0) / answers.length)
-      : 50;
-    return {
-      overallScore: avgScore,
-      categories: [
-        { name: 'Technical Knowledge', score: avgScore, detail: 'Based on answer scores' },
-        { name: 'Answer Clarity', score: avgScore, detail: 'Based on answer scores' },
-      ],
-      keyWeaknesses: ['AI analysis unavailable — review answers manually'],
-      recommendations: ['Review your answers and identify areas for improvement'],
-      summary: `You answered ${answers.length} questions with an average score of ${avgScore}/100.`,
-    };
+    return await provider().generateEmbedding(text);
+  } catch {
+    return null;
   }
 }
 
-export async function extractMistakes(question, evaluation, profile) {
-  const provider = getModelProvider();
-  if (!provider) return [];
-
-  if (evaluation.score >= 80 && evaluation.weaknesses.length === 0) {
-    return []; // No significant mistakes to extract
-  }
-
-  const prompt = `Extract any meaningful mistakes or knowledge gaps from this practice answer.
-
-QUESTION: ${question.question_text || question.question}
-TOPIC: ${question.topic_name || question.topic}
-SCORE: ${evaluation.score}/100
-WEAKNESSES: ${(evaluation.weaknesses || []).join(', ')}
-CONCEPT GAPS: ${(evaluation.conceptGaps || []).join(', ')}
-FEEDBACK: ${evaluation.feedback}
-
-If there are meaningful mistakes worth remembering for future sessions, return them.
-If the answer was good (score >= 80), return an empty array.
-
-Respond with this exact JSON:
-[
-  {
-    "topic": "specific topic area",
-    "mistake": "what the user got wrong or struggled with",
-    "severity": "low" | "medium" | "high",
-    "recommendation": "what they should study/practice"
-  }
-]`;
-
-  try {
-    const result = await provider.generateJSON(prompt, {}, { temperature: 0.2 });
-    return Array.isArray(result) ? result : [];
-  } catch (err) {
-    console.error('[AI] Mistake extraction failed:', err.message);
-    // Create a basic mistake from evaluation data
-    if (evaluation.weaknesses.length > 0) {
-      return [{
-        topic: question.topic_name || question.topic || 'general',
-        mistake: evaluation.weaknesses[0],
-        severity: evaluation.score < 40 ? 'high' : evaluation.score < 60 ? 'medium' : 'low',
-        recommendation: evaluation.feedback || 'Review this topic'
-      }];
-    }
-    return [];
-  }
-}

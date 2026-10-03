@@ -3,10 +3,11 @@
 // ============================================
 import 'dotenv/config';
 import { query } from './connection.js';
+import { isDatabaseEnabled } from './mode.js';
 
 const DEMO_PROFILE = {
   id: 'demo-user-001',
-  name: 'Ayush',
+  name: 'Demo Friend',
   target_role: 'Full-Stack Software Engineer',
   skills: JSON.stringify(['JavaScript', 'React', 'Node.js', 'Python', 'SQL', 'System Design']),
   weak_areas: JSON.stringify(['Database optimization', 'System design trade-offs', 'Concurrency']),
@@ -21,8 +22,8 @@ const DEMO_PROFILE = {
 async function seed() {
   console.log('[Seed] Seeding database...');
   try {
-    if (!process.env.DATABASE_URL) {
-      console.log('[Seed] No DATABASE_URL found. Skipping DB seeding.');
+    if (!isDatabaseEnabled()) {
+      console.log('[Seed] PostgreSQL is not enabled. Skipping DB seeding.');
       return;
     }
 

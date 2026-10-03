@@ -5,14 +5,15 @@ import { Router } from 'express';
 import { v4 as uuid } from 'uuid';
 import { getStore } from '../db/memoryStore.js';
 import { query } from '../db/connection.js';
+import { isDatabaseEnabled } from '../db/mode.js';
 
 export const demoRouter = Router();
 
-const USE_DB = () => !!process.env.DATABASE_URL;
+const USE_DB = isDatabaseEnabled;
 
 const DEMO_PROFILE = {
   id: 'demo-user-001',
-  name: 'Ayush',
+  name: 'Demo Friend',
   target_role: 'Full-Stack Software Engineer',
   skills: ['JavaScript', 'React', 'Node.js', 'Python', 'SQL', 'System Design'],
   weak_areas: ['Database optimization', 'System design trade-offs', 'Concurrency'],

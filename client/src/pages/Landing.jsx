@@ -39,7 +39,7 @@ export default function Landing({ profileId }) {
       <main className="landing-hero">
         <div className="landing-brand">
           <span className="badge badge-yellow" style={{ marginBottom: '1rem' }}>
-            ⚡ Hackathon Build • AI Practice Coach for One Real Friend
+            LOCAL GEMMA • PRACTICE THAT LEARNS FROM YOUR HISTORY
           </span>
           <h1 className="landing-logo">
             FRIEND<span>FIT</span>
@@ -47,8 +47,11 @@ export default function Landing({ profileId }) {
         </div>
 
         <p className="landing-tagline">
-          Stop practicing blindly. FriendFit <em>remembers your recurring mistakes</em>, 
-          spots conceptual gaps, and serves your exact <em>Next Best Action</em> to ace technical interviews.
+          DON'T PRACTICE MORE.<br />
+          PRACTICE WHAT YOU'RE <em>ACTUALLY BAD AT.</em>
+        </p>
+        <p className="landing-tagline landing-supporting-copy">
+          An AI coach that learns from your mistakes and tells you what to practice next.
         </p>
 
         <div className="landing-cta">
@@ -58,7 +61,7 @@ export default function Landing({ profileId }) {
               style={{ fontSize: '1.1rem', padding: '0.85rem 1.75rem' }}
               onClick={handleStartPractice}
             >
-              {profileId ? '🚀 Resume Practice Room' : '🔥 Create Profile & Start'}
+              {profileId ? '🚀 Resume Practice Room' : 'START PRACTICING'}
             </button>
 
             <button 
@@ -67,7 +70,7 @@ export default function Landing({ profileId }) {
               onClick={handleStartDemo}
               disabled={loadingDemo}
             >
-              {loadingDemo ? 'Initializing Demo...' : '⚡ Try Demo with Ayush’s Data'}
+              {loadingDemo ? 'Initializing Demo...' : '⚡ Explore Clearly Labeled Demo Data'}
             </button>
           </div>
 
@@ -85,29 +88,29 @@ export default function Landing({ profileId }) {
         <div className="landing-features">
           <div className="landing-feature">
             <span className="feat-icon">🧠</span>
-            <span>Recurring Mistake Memory</span>
+            <span>Personal Memory</span>
           </div>
           <div className="landing-feature">
             <span className="feat-icon">🎯</span>
-            <span>Next Best Action Engine</span>
+            <span>Adaptive Practice</span>
           </div>
           <div className="landing-feature">
             <span className="feat-icon">🎙️</span>
-            <span>Voice & Text Responses</span>
+            <span>Text + Browser Dictation</span>
           </div>
           <div className="landing-feature">
             <span className="feat-icon">📈</span>
-            <span>Granular Rubric Scoring</span>
+            <span>Local AI (when available)</span>
           </div>
           <div className="landing-feature">
             <span className="feat-icon">⚡</span>
-            <span>Zero-Cloud Offline Fallback</span>
+            <span>Local Inference When Ollama Is Running</span>
           </div>
         </div>
       </main>
 
       <footer className="landing-footer">
-        <p>FRIEND FIT • Built with Neo-Pop Brutalism • High-Performance Personal Practice System</p>
+        <p>FRIENDFIT • A focused practice coach • Sample data is labeled throughout the demo</p>
       </footer>
     </div>
   );

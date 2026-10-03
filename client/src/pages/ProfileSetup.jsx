@@ -11,16 +11,14 @@ export default function ProfileSetup({ onComplete }) {
 
   // Form State
   const [name, setName] = useState('');
-  const [targetRole, setTargetRole] = useState('Full-Stack Software Engineer');
-  const [skills, setSkills] = useState(['JavaScript', 'React', 'Node.js', 'SQL']);
+  const [targetRole, setTargetRole] = useState('');
+  const [skills, setSkills] = useState([]);
   const [skillInput, setSkillInput] = useState('');
-  const [weakAreas, setWeakAreas] = useState(['System Design Trade-offs', 'Database Optimization']);
+  const [weakAreas, setWeakAreas] = useState([]);
   const [weakInput, setWeakInput] = useState('');
-  const [projects, setProjects] = useState([
-    { name: 'E-Commerce Microservices', tech: 'React, Node, PostgreSQL', description: 'Real-time order processing and inventory' }
-  ]);
+  const [projects, setProjects] = useState([]);
   const [resumeText, setResumeText] = useState('');
-  const [jobDescription, setJobDescription] = useState('Seeking Mid-to-Senior Full-Stack Engineer role at high-growth startup.');
+  const [jobDescription, setJobDescription] = useState('');
 
   const addSkill = (e) => {
     if ((e.key === 'Enter' || e.key === ',') && skillInput.trim()) {
@@ -67,7 +65,7 @@ export default function ProfileSetup({ onComplete }) {
   };
 
   const handlePrefill = () => {
-    setName('Ayush');
+    setName('Demo Friend');
     setTargetRole('Full-Stack Software Engineer');
     setSkills(['JavaScript', 'React', 'Node.js', 'Python', 'SQL', 'System Design']);
     setWeakAreas(['Database optimization', 'System design trade-offs', 'Concurrency']);
@@ -143,7 +141,7 @@ export default function ProfileSetup({ onComplete }) {
               onClick={handlePrefill}
               title="Fill with standard demo values"
             >
-              ⚡ Fast Prefill
+              ⚡ Load Sample Values
             </button>
           </div>
 
@@ -179,7 +177,7 @@ export default function ProfileSetup({ onComplete }) {
                     type="text"
                     className="input"
                     style={{ width: '100%', padding: '0.75rem', border: 'var(--border)', borderRadius: 'var(--radius-sm)' }}
-                    placeholder="e.g., Ayush"
+                    placeholder="Your friend's name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     required
@@ -292,8 +290,8 @@ export default function ProfileSetup({ onComplete }) {
 
                 <div className="form-group">
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                    <label style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}>
-                      PAST PROJECTS (Coach asks questions about these)
+                      <label style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}>
+                      PROJECTS (OPTIONAL; COACH CAN ASK ABOUT THESE)
                     </label>
                     <button type="button" className="btn btn-sm btn-secondary" onClick={addProject}>
                       + Add Project

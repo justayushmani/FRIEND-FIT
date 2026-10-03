@@ -15,7 +15,7 @@ async function request(endpoint, options = {}) {
     const res = await fetch(url, config);
     if (!res.ok) {
       const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.error || `Request failed: ${res.status}`);
+      throw new Error(errorData.message || errorData.error || `Request failed: ${res.status}`);
     }
     return await res.json();
   } catch (err) {
@@ -38,10 +38,10 @@ export const api = {
   updateProfile: (id, data) => request(`/profile/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 
   // Session
-  startSession: (profileId, sessionType = 'interview') =>
-    request('/session/start', { method: 'POST', body: JSON.stringify({ profileId, sessionType }) }),
-  getQuestion: (sessionId) =>
-    request(`/session/${sessionId}/question`, { method: 'POST' }),
+  startSession: (profileId, sessionType = 'interview', targetTopic = null) =>
+    request('/session/start', { method: 'POST', body: JSON.stringify({ profileId, sessionType, targetTopic }) }),
+  getQuestion: (sessionId, topic = null) =>
+    request(`/session/${sessionId}/question`, { method: 'POST', body: JSON.stringify({ topic }) }),
   submitAnswer: (sessionId, questionId, answerText, timeTaken) =>
     request(`/session/${sessionId}/answer`, {
       method: 'POST',
@@ -51,6 +51,11 @@ export const api = {
     request(`/session/${sessionId}/end`, { method: 'POST' }),
   getSession: (sessionId) => request(`/session/${sessionId}`),
   getSessionsByProfile: (profileId) => request(`/session/profile/${profileId}`),
+
+  // Voice (ElevenLabs STT)
+  transcribeAudio: (audioBase64, mimeType = 'audio/webm') =>
+    request('/voice/transcribe', { method: 'POST', body: JSON.stringify({ audioBase64, mimeType }) }),
+  getVoiceStatus: () => request('/voice/status'),
 
   // Analysis
   getAnalysis: (sessionId) => request(`/analysis/session/${sessionId}`),

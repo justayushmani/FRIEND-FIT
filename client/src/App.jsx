@@ -1,5 +1,4 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { useState } from 'react';
 import { useLocalStorage } from './hooks';
 import Landing from './pages/Landing';
 import ProfileSetup from './pages/ProfileSetup';
